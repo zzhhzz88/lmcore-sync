@@ -1,0 +1,20 @@
+{
+  "base_url": "https://core.xjtlu.edu.cn",
+  "browser": "msedge",
+  "courses": [
+    {
+      "match": "EEE339",
+      "folder": "C:/Users/你的用户名/Desktop/eee339"
+    }
+  ],
+  "extra_deadlines": [
+    {
+      "course": "COS301",
+      "name": "In-class test（示例：邮件里通知、Moodle 上没有的考试）",
+      "type": "线下测验",
+      "due": "2026-11-24",
+      "status": "",
+      "url": ""
+    }
+  ]
+}
