@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 
 LAYOUTS: dict[str, dict] = {
@@ -37,6 +39,54 @@ FOLDER_HELP = {
 
 DEFAULT_COURSE_PATTERN = r"^[A-Z]{2,4}\d{3}"     # XJTLU module codes: EEE339, ADS305, ...
 INDEX_NAMES = ("00_从这里开始.md", "README.md", "先看这里.md", "00_START_HERE.md")
+
+
+def desktop_dir() -> Path:
+    """The user's real desktop. On Windows ask the shell (handles OneDrive
+    desktop redirection and relocated desktops); elsewhere ~/Desktop or ~/桌面."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            from uuid import UUID
+
+            class GUID(ctypes.Structure):
+                _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD), ("d4", ctypes.c_ubyte * 8)]
+
+            u = UUID("B4BFCC3A-DB2C-424C-B029-7FE99A87C641")  # FOLDERID_Desktop
+            g = GUID(u.fields[0], u.fields[1], u.fields[2], (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+            out = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(out)) == 0:
+                path = Path(out.value)
+                ctypes.windll.ole32.CoTaskMemFree(out)
+                if path.exists():
+                    return path
+        except Exception:
+            pass
+    for cand in (Path.home() / "Desktop", Path.home() / "桌面"):
+        if cand.exists():
+            return cand
+    return Path.home() / "Desktop"
+
+
+def courses_root(cfg: dict) -> Path:
+    """Where course folders go. Unset / "desktop" / "~/Desktop" = the real desktop."""
+    raw = (cfg.get("courses_root") or "").strip()
+    if not raw or raw.lower() in ("desktop", "~/desktop", "~\desktop", "桌面"):
+        return desktop_dir()
+    return Path(os.path.expandvars(raw)).expanduser()
+
+
+def current_real_courses(current: list[dict], cfg: dict) -> list[dict]:
+    """This semester's real modules (drops 'Communication Area', 'Career Centre' ...)."""
+    out, seen = [], set()
+    for c in current:
+        code = course_code(c["shortname"])
+        if code in seen or not re.match(cfg.get("course_pattern", DEFAULT_COURSE_PATTERN), c["shortname"] or "", re.I):
+            continue
+        seen.add(code)
+        out.append(c)
+    return out
 
 
 def course_code(shortname: str) -> str:
@@ -78,7 +128,7 @@ def find_existing_folder(root: Path, code: str) -> Path | None:
 
 def auto_entries(cfg: dict, current: list[dict]) -> list[dict]:
     """New config entries for current-semester courses that are not configured yet."""
-    root = Path(cfg.get("courses_root") or (Path.home() / "Desktop")).expanduser()
+    root = courses_root(cfg)
     have = {course_code(e["match"]) for e in cfg.get("courses", [])}
     new = []
     for c in current:

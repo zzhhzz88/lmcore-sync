@@ -37,8 +37,8 @@ else {
     & $vpy -m pip install "markitdown[pdf,docx,pptx,xlsx]" -q
     if ($LASTEXITCODE -ne 0) { throw "转换器安装失败。" }
 }
-Write-Host "== 4/4 首次设置：登录并选择课程" -ForegroundColor Cyan
+Write-Host "== 4/4 首次设置：登录 → 选本学期课程 → 在桌面建课程文件夹 → 第一次同步" -ForegroundColor Cyan
 & $vpy -m lmcore_sync setup
 if ($LASTEXITCODE -ne 0) { throw "首次设置未完成，请重试。" }
-Write-Host "`n安装完成。以后双击『同步课件.cmd』即可。" -ForegroundColor Green
+Write-Host "`n安装完成！课程文件夹已经在桌面上了。以后双击『同步课件.cmd』更新，双击『查看作业DDL.cmd』看截止时间。" -ForegroundColor Green
 pause

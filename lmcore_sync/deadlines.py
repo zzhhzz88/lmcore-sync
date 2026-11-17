@@ -344,4 +344,5 @@ def render(rows: list[dict], extra: list[dict] | None = None, recent: list[dict]
 
 
 def default_path() -> Path:
-    return Path.home() / "Desktop" / "作业DDL.md"
+    from .courses import desktop_dir
+    return desktop_dir() / "作业DDL.md"

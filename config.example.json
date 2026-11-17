@@ -1,8 +1,8 @@
 {
   "base_url": "https://core.xjtlu.edu.cn",
   "browser": "msedge",
-  "courses_root": "~/Desktop",
-  "auto_courses": false,
+  "courses_root": "desktop",
+  "auto_courses": true,
   "layout_preset": "zh",
   "ascii_prefixes": [
     "EEE"
@@ -10,12 +10,7 @@
   "exclude": [],
   "request_delay": 0.3,
   "retries": 3,
-  "courses": [
-    {
-      "match": "ABC123",
-      "folder": "~/Desktop/abc123",
-      "layout": "zh"
-    }
-  ],
-  "extra_deadlines": []
+  "courses": [],
+  "extra_deadlines": [],
+  "_说明": "courses 留空即可：同步时会自动发现本学期课程并在桌面建文件夹。想手动指定就加 {\"match\": \"ABC123\", \"folder\": \"D:/学习/abc123\"}"
 }

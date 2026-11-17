@@ -1,130 +1,241 @@
-# lmcore-sync — Learning Mall Core 课件同步工具
+<div align="center">
 
-把 Learning Mall Core（Moodle）的课件、作业要求、实验材料、公告、自己的提交和反馈同步到本地课程文件夹，生成资料清单、AI 阅读目录、作业截止时间汇总和日历文件。
+# 📚 LMCore Sync · 西浦课件一键同步
 
-面向 Windows 10/11、Python 3.10+，优先使用 Edge。使用你本人在学校官网完成的 SSO 登录；不需要 Moodle API Token。其他 Moodle 站点可配置，但页面结构兼容性需实际验证。
+**专为西交利物浦大学（XJTLU）学生做的 Learning Mall Core 课件同步助手**
 
-## 快速开始
+登录一次 → 本学期每门课自动在桌面建好文件夹 → 课件、作业要求、Lab、Handbook、公告全部下载归类 → 截止日期一张表看清
 
-1. 下载并解压分享包，或克隆仓库。文件夹不要放在临时目录。
-2. 双击 **install.cmd**。安装依赖后，在弹出的学校登录页完成登录。
-3. 选择课程和保存位置，默认放桌面。可以开启“自动发现本学期课程”。
-4. 以后双击 **同步课件.cmd**。首次同步可能较慢，之后按记录跳过已有资源。
+[![XJTLU only](https://img.shields.io/badge/XJTLU-Learning%20Mall%20Core-6a1b9a)](https://core.xjtlu.edu.cn)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)](#-三步上手)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab)](https://www.python.org/)
+[![Tests](https://github.com/zzhhzz88/lmcore-sync/actions/workflows/tests.yml/badge.svg)](https://github.com/zzhhzz88/lmcore-sync/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-已经在本机使用旧版：把旧目录的 `config.json` 和 `user_data/cookies.json` 复制到新版相同位置即可尝试复用登录；过期时重新登录。课程目录内的 `.lmcore/` 保留原地。不要把这些私人文件发给别人。
+</div>
 
-本仓库是 Python 源码工具，分享 ZIP 不是独立 EXE。需要 Python、网络和有效学校账号；安装器尝试用 winget 安装缺少的 Python。文件转换优先使用本地 Filee，否则安装 markitdown；转换结果应对照原文检查公式和图片。
+> [!IMPORTANT]
+> **西浦专属。** 默认对接 `core.xjtlu.edu.cn`，课程识别、Module Handbook 解析、XJTLU 统一身份认证登录都按西浦的系统写的。
+> 这是**学生个人做的开源工具，不是学校官方产品**，和 XJTLU / ITS 没有任何关系。只读不写：不会替你提交作业、不会发帖。
 
-## 同步后得到什么
+---
+
+## 😩 你是不是也这样
+
+- 每周开 Learning Mall，一门门点进去下 Lecture，下完散落在「下载」文件夹里
+- 老师悄悄更新了 Lecture 5-2 的 PDF，你手里还是旧的
+- 机房上机测试、线下 in-class test 在 Moodle 上**根本没有提交入口**，日历里看不到，差点错过
+- 想让 AI 帮你复习，结果它读 PDF 读得一塌糊涂
+
+## ✨ 它帮你做什么
+
+| | 功能 | 说明 |
+|---|---|---|
+| 📁 | **自动在桌面建课程文件夹** | 识别本学期的真实课程（自动跳过 Communication Area、Career Centre 这类非课程），每门课一个 `桌面/<课程代码>/`，下好编号子文件夹。已有同名文件夹就沿用 |
+| 📥 | **全量下载并分类** | Lecture、Lab、作业题目和附件、Module Handbook、公告、你自己的提交和老师反馈，自动分进「课件 / 实验 / 作业 / 考试复习…」 |
+| 🧹 | **不重复、不覆盖** | 按文件内容（SHA-256）去重：你以前手动下的、改过名、挪过位置的都认得出，不会再下一份；你自己放的文件永远不动 |
+| 🔄 | **老师更新了也知道** | 老师替换了文件，新版放原位，旧版自动收进 `_旧版本/` |
+| ⏰ | **一张表看清所有 DDL** | 桌面生成 `作业DDL.md`：Moodle 作业 + **Module Handbook 考核表** + 没有提交入口的考核提醒，带占比、剩余天数、提交状态，还有最近 7 天新增资料 |
+| 📅 | **导入手机日历** | 同时生成 `作业DDL.ics`，导入 Outlook / 苹果 / 谷歌日历，提前 1 天和 2 小时提醒 |
+| 🤖 | **给 AI 准备好的文字版** | PDF / PPT / Word / Notebook / 网页全部转成 Markdown（实验 zip 先解压），放在 `06_AI可读版/`，目录结构一一对应，还附 AI 阅读目录 |
+| 🕘 | **每天自动同步** | 一键注册 Windows 定时任务；登录过期时不会卡住，只在 DDL 顶部提醒你重新登录 |
+
+## 🚀 三步上手
+
+1. **下载**：右上角 `Code → Download ZIP`（或 [Releases](https://github.com/zzhhzz88/lmcore-sync/releases)），解压到一个固定位置，比如 `文档/lmcore-sync`。
+2. **双击 `install.cmd`**：自动装好依赖，弹出 XJTLU 统一身份认证页面 → 用你自己的学号密码登录。
+3. **选课、建文件夹、开始同步**：列出本学期课程，**直接回车 = 全部**；再回车 = 建在桌面。然后它就开始下载了。
+
+以后想更新，双击 **`同步课件.cmd`**；只想看截止时间，双击 **`查看作业DDL.cmd`**。
+
+<details>
+<summary>👀 第一次运行大概长这样</summary>
+
+```text
+本学期的课程：
+   1. EEE339   EEE339-2627-S1-Digital System Design with HDL
+   2. ADS305   ADS305-2627-S1-Big Data Analytics
+   3. ISA305   ISA305-2627-S1-Bio-Computation
+   4. COS301   COS301-2627-S1-Analogue and Digital Communications II
+
+要同步哪些？输入编号或课程代码（空格分隔），直接回车 = 全部：
+课程文件夹建在哪里？直接回车 = 桌面（C:\Users\you\Desktop）：
+以后新学期的新课程也自动建文件夹？[Y/n]：
+
+  📁 EEE339   → C:\Users\you\Desktop\eee339（新建）
+  📁 ADS305   → C:\Users\you\Desktop\ads305（新建）
+  📁 ISA305   → C:\Users\you\Desktop\isa305（已存在，沿用）
+  📁 COS301   → C:\Users\you\Desktop\cos301（新建）
+
+现在就开始第一次同步，把课件下载进这些文件夹吗？[Y/n]：
+
+======== ADS305-2627-S1 → C:\Users\you\Desktop\ads305
+   课程里共有 51 个活动
+      + 02_课件/ADS305-Lecture7-booklet-COMPLETE.pdf
+      + 04_作业/Coursework 2/ADS305 CW2 Data Brief.pdf
+      ↻ 02_课件/Lecture5 Data Visualization.pdf（老师更新了文件，旧版在 _旧版本/）
+   完成：新下载 103，已有跳过 26，失败 0，AI 可读版 142
+
+>> 作业 DDL 已更新：C:\Users\you\Desktop\作业DDL.md
+   未交 12-02 23:59  ADS305  Project: Data Analysis and Modeling（占总评 20%）
+   未交 12-09 23:59  ISA305  Assessment 2（占总评 10%）
+```
+</details>
+
+## 🗂 同步完桌面上会多出什么
 
 ```text
 桌面/
-  作业DDL.md                 # 待办、截止日期、提交状态、最近7天新增或更新
-  作业DDL.ics                # 可手动导入 Outlook / Apple / Google Calendar
-  <课程代码>/
-    00_从这里开始.md          # 仅在没有既有指南时生成
-    00_资料清单.md            # 逐项来源、状态和文件路径
-    01_课程信息/
-    02_课件/
-    03_实验/
-    04_作业/<作业名称>/
-    05_考试复习/
-    06_AI可读版/00_AI目录.md
-    07_参考资料/
-    .lmcore/state.json       # 增量同步记录
+├── 作业DDL.md          ← 所有课的待办、考试、最近新增资料，一个文件看完
+├── 作业DDL.ics         ← 双击导入日历
+└── ads305/
+    ├── 00_从这里开始.md   ← 这门课的导航（你已有的指南不会被覆盖）
+    ├── 00_资料清单.md     ← Learning Mall 上每份资料 ↔ 本地哪个文件
+    ├── 01_课程信息/       Module Handbook、公告.md、外部链接.md
+    ├── 02_课件/           Lecture PDF / PPT
+    ├── 03_实验/           Lab 材料（老师的文件夹按原名保留）
+    ├── 04_作业/
+    │   └── Coursework 2/  题目、数据、作业说明_Moodle页面.md、我的提交与反馈/
+    ├── 05_考试复习/       往年试题、模拟题
+    ├── 06_AI可读版/       ↑ 上面所有文档的 Markdown 版，丢给 AI 就行
+    └── 07_参考资料/
 ```
 
-默认中文目录；EEE 课程默认英文目录，照顾 Quartus 等路径限制。也可逐课选 `"layout": "en"` 或 `"zh"`，或提供字段覆盖对象。已有目录按大小写无关的课程代码复用，既有指南不覆盖。自动模式只增加 Moodle 标为本学期（inprogress）、符合课程代码规则的课程；不会清理过往课程。
+> EEE 开头的课默认用英文目录名（`02_Lectures`、`04_Assignments/Assignment1`…），因为 Quartus 13 遇到中文或空格路径会出错。
 
-- 用 SHA-256 校验去重，同名同大小不等于相同内容。
-- 老师上传新版本时，工具管理且未被你改动的文件可原位更新，旧内容保留在同目录 `_旧版本/`，同一天多个版本也保留。
-- 你改过的文件，以及同步前就存在并被去重复用的个人文件，更新时另存副本。
-- 增量记录无法发现所有“URL没变但内容变了”的情况，怀疑漏更新时使用 `sync --refresh`。
-- 网络短暂失败、HTTP 408/429/5xx 会有限重试，默认请求间隔0.3秒。失败条目显示在清单中，同步以非零状态退出。
+<details>
+<summary>📋 作业DDL.md 长什么样</summary>
 
-## 常用命令
+```markdown
+## ⚠ 待办（还没交的作业 / 还没考的考试）
+- **12月02日 Wed（时间待定）** · ADS305 · Project: Data Analysis and Modeling（占总评 20%）（剩 15 天）
+     — 02/Dec/2026 至 03/Dec/2026。This is an in-computer-lab closed-session test…
+- **12月09日 Wed 23:59** · ISA305 · Assessment 2（占总评 10%）（剩 22 天）
+- **12月13日 Sun 23:59** · EEE339 · Assignment 2 Submission（占总评 20%）（剩 26 天）
 
-在工具目录打开终端；安装了虚拟环境时用 `.venv\Scripts\python.exe` 替代下列 `python`。
+## 📥 最近 7 天新增 / 更新的资料（6 个）
+**EEE339**
+- 🆕 2026-11-17 [Lecture25_full.pdf](<eee339/02_Lectures/Lecture25_full.pdf>)
 
-```powershell
-python -m lmcore_sync setup
-python -m lmcore_sync login
-python -m lmcore_sync courses
-python -m lmcore_sync sync
-python -m lmcore_sync sync --only EEE339 COS301
-python -m lmcore_sync sync --refresh
-python -m lmcore_sync sync --no-convert
-python -m lmcore_sync sync --all-forums
-python -m lmcore_sync convert
-python -m lmcore_sync ddl
-python -m lmcore_sync doctor
-python -m lmcore_sync schedule install --time 09:00
-python -m lmcore_sync schedule status
-python -m lmcore_sync schedule remove
+## ❓ 有考核但 Moodle 上没有截止时间（务必自己确认）
+- ADS305 · Coursework 2: PineTrail Campervans（版块：Lecture 8 - Supervised Learning）
 ```
+</details>
 
-`sync --videos` 可包含音视频，但大文件仍受单文件400MiB的写入限制（当前下载后才检查大小）。默认只存公告讨论区，不抓所有讨论。工具不会提交作业或修改 Moodle 内容。
+## 🤔 常见问题
 
-## 每天定时同步
+<details>
+<summary><b>为什么不直接用 Moodle-DL？</b></summary>
 
-双击 **定时同步.cmd**，或运行 `schedule install --time 09:00`。安装工具本身不会自动注册定时任务。
+[Moodle-DL](https://github.com/C0D3D3V/Moodle-DL) 很好用，但它依赖 Moodle 的手机端 Web Service。西浦的 Learning Mall Core 关闭了这个接口（`enablemobilewebservice = 0`），还走统一身份认证，所以连不上。本工具改用**真实浏览器（Edge）由你本人登录**，再用这个会话下载。
+</details>
 
-- 使用 Windows 任务计划程序，按电脑本地时间运行。当前 Windows 用户必须已登录；错过时间可在条件满足后补跑，不唤醒电脑。
-- 使用无窗口 Python；任务本身不会重复并发启动。手动同步时请等上一轮结束。
-- 学校登录过期时退出码为2，不弹窗口等15分钟；在原 DDL 顶部标注需要登录，保留上次结果，ICS也保留。
-- 本次日志在 `user_data/last_sync.log`，每次定时运行覆盖。执行 `login` 后再同步即可恢复。
-- 移动项目目录前先 `schedule remove`，移动后重新安装任务；每个路径的任务名不同。
+<details>
+<summary><b>我的密码安全吗？</b></summary>
 
-## DDL 与日历的边界
+密码只在学校官方登录页里由你自己输入，工具从来不读、不存密码。登录后的 cookie 保存在本机 `user_data/`，**相当于登录凭证，不要发给别人、不要上传**（`.gitignore` 已排除）。
+</details>
 
-数据来自作业/测验列表、Module Handbook 的 Initial Assessment、课程资料中疑似考核的标题以及 Moodle 时间线。缺日期的考核保留为待确认，不猜具体时间；解析结果不能取代老师通知。
+<details>
+<summary><b>我之前手动下了一堆课件，会被覆盖或者重复下载吗？</b></summary>
 
-老师在邮件或公告调整的安排可以在 `config.json` 的 `extra_deadlines` 中补充：
+不会。同步前会给课程文件夹里所有文件算哈希，内容相同的直接跳过，清单里标「已有(未重复下载)」并指向你那份。你改过的文件遇到老师更新时，新版另存副本，你的那份不动。
+</details>
+
+<details>
+<summary><b>Moodle 上没写日期的考试怎么办？</b></summary>
+
+工具会读每门课 Module Handbook 里的考核表（Initial Assessment，补考部分自动忽略），所以机房上机测试、in-class test 也能列出来；课程页上像考核但没有提交入口的资料会单独提醒。老师在邮件里改了时间、或者出了期末考试安排，在 `config.json` 里加一条 `extra_deadlines` 即可，`replaces` 写要替换的自动条目关键词：
 
 ```json
-{"course":"ABC123","name":"In-class test","type":"线下测验","due":"2027-01-20T14:00:00+08:00","replaces":"In-class test"}
+"extra_deadlines": [
+  {"course": "ABC123", "name": "期末考试（闭卷 2 小时）", "type": "期末考试",
+   "due": "2026-12-31T10:00", "note": "09:30 入场；考场见考试安排", "weight": "60%",
+   "replaces": ["Written Examination"]}
+]
 ```
+</details>
 
-`due` 只有日期时日历生成全天事项并注明时间待确认；带时间无时区时按电脑本地时区解释，因此请保持系统时区与学校一致，或明确写 `+08:00`。已提交项目与过期项目不会作为新的待办日历事件导出。稳定 UID 有助于客户端识别同一事项，但反复导入、更新和删除旧事件的行为由日历软件决定。本地 `.ics` 文件不会自动变成在线订阅。
+<details>
+<summary><b>下学期还要重新设置吗？</b></summary>
 
-部分来源读取失败时保留旧报告，并提示尚未刷新。自检 `doctor` 只检查本机依赖、目录和登录文件存在，不保证账号会话仍有效。
+不用。开着「新学期的新课程也自动建文件夹」，下次同步时新课程会自动出现在桌面上；不想要的课写进 `config.json` 的 `exclude`。
+</details>
 
-## 配置
+<details>
+<summary><b>转成 Markdown 用的是什么？</b></summary>
 
-先通过 setup 创建配置，再参考 `config.example.json`。主要可选项：
+优先用本机装的 Filee（`filee-cli.exe`，离线、快、保留课件图片）；没装就自动用 [markitdown](https://github.com/microsoft/markitdown)。公式和图表请以原 PDF 为准。
+</details>
 
-| 字段 | 含义 |
+<details>
+<summary><b>别的学校能用吗？</b></summary>
+
+把 `config.json` 的 `base_url` 换成你们的 Moodle 地址，理论上能跑（需要 Moodle 4.x）。但课程代码识别、Handbook 解析是按西浦格式写的，其他学校需要自己调整 `course_pattern`，Handbook 部分可能不生效。
+</details>
+
+<details>
+<summary><b>出问题了怎么办？</b></summary>
+
+双击 **`检查环境.cmd`**（`doctor` 命令）看看缺什么。登录过期就运行 `python -m lmcore_sync login` 重新登录。怀疑漏了老师的更新，用 `sync --refresh` 全部重新核对一遍。还不行欢迎提 [Issue](https://github.com/zzhhzz88/lmcore-sync/issues)（**不要贴 cookie、学号等个人信息**）。
+</details>
+
+## ⌨️ 命令速查
+
+安装后在工具目录里用 `.venv\Scripts\python.exe` 代替下面的 `python`。
+
+| 命令 | 作用 |
 |---|---|
-| `courses_root` | 自动建课程目录的根路径，默认桌面 |
-| `auto_courses` | 同步时发现并添加本学期课程，默认关闭（setup会询问） |
-| `exclude` | 自动发现要排除的课程代码 |
-| `layout_preset` / `ascii_prefixes` | 默认布局 / 默认英文布局的课程前缀 |
-| `request_delay` / `retries` | 请求间隔秒数 / 最大额外重试次数 |
-| `ddl_file` / `ics_file` | 覆盖默认报告路径 |
-| `extra_deadlines` | 手工补充或修正截止时间 |
+| `python -m lmcore_sync setup` | 登录 → 选本学期课程 → 在桌面建文件夹 → 第一次同步 |
+| `python -m lmcore_sync sync` | 增量同步（新课程自动建文件夹） |
+| `python -m lmcore_sync sync --only EEE339 COS301` | 只同步某几门 |
+| `python -m lmcore_sync sync --refresh` | 不看记录，全部重新核对 |
+| `python -m lmcore_sync ddl` | 只刷新 `作业DDL.md` / `.ics` |
+| `python -m lmcore_sync convert` | 只重新生成 AI 可读版 |
+| `python -m lmcore_sync login` | 登录过期时重新登录 |
+| `python -m lmcore_sync doctor` | 检查环境 |
+| `python -m lmcore_sync schedule install --time 09:00` | 每天 9 点自动同步（`status` / `remove` 查看、取消） |
 
-## 隐私与分享
+<details>
+<summary>⚙️ config.json 可选项</summary>
 
-`config.json`、`user_data/`（含cookies、浏览器资料、日志）、虚拟环境、课程文件、个人作业和本地交接记录不进入 Git。只发布程序源码、示例配置和测试。完整原版备份可能含登录凭证，留在本机，不要上传或发送。
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `courses_root` | 桌面 | 课程文件夹建在哪（自动识别 OneDrive 重定向的桌面） |
+| `auto_courses` | `true` | 同步时自动发现本学期新课程并建文件夹 |
+| `exclude` | `[]` | 不要的课程代码，如 `["PSP305"]` |
+| `layout_preset` / `ascii_prefixes` | `zh` / `["EEE"]` | 默认中文目录 / 哪些课用英文目录 |
+| `course_pattern` | `^[A-Z]{2,4}\d{3}` | 什么样的课程短名算「真课程」 |
+| `request_delay` / `retries` | `0.3` / `3` | 请求间隔秒数 / 网络出错重试次数 |
+| `ddl_file` / `ics_file` | 桌面 | DDL 报告和日历文件位置 |
+| `extra_deadlines` | `[]` | 手动补充或修正的截止时间、考试安排 |
 
-密码只在学校官方登录页输入；本地cookies仍是敏感凭证。下载内容用于个人学习，使用前遵守学校的访问规则。
+每门课还可以单独写 `"layout": "en"` / `"zh"`，或者一个字段对象覆盖具体文件夹名。
+</details>
 
-## 设计参考与后续方向
+## 🙏 致谢与参考
 
-- [Moodle-DL](https://github.com/C0D3D3V/Moodle-DL)：成熟的Moodle课程下载项目。学校关闭Web Service时，需要其他访问方式。
-- [moodle-browser-scraper](https://github.com/thntx/moodle-browser-scraper)：用真实浏览器会话支持SSO和API不可用的站点，按课程组织增量下载。
-- [moodle_scraper](https://github.com/elonuziel/moodle_scraper)：浏览器抓取思路参考。
+- [thntx/moodle-browser-scraper](https://github.com/thntx/moodle-browser-scraper)、[elonuziel/moodle_scraper](https://github.com/elonuziel/moodle_scraper)（MIT）——「真实浏览器会话 + 抓取」思路来源
+- [C0D3D3V/Moodle-DL](https://github.com/C0D3D3V/Moodle-DL) —— 最成熟的 Moodle 下载器（API 可用时首选它）
+- [setsun-ai/moodle-sync](https://github.com/setsun-ai/moodle-sync)、[Deadline-Hub](https://github.com/Vatsalyarabari/Deadline-Hub)、[moodle2ia](https://github.com/estevao-tarifa/moodle2ia) —— 定时同步、旧版本保留、从课程文件里找 DDL、给 AI 的课程目录等想法
 
-本次优先落实自动目录、网络重试、版本保留、近期资料、ICS、定时运行和可测试的错误处理。后续可考虑下载前大小限制与流式写入、跨平台定时器、更多Moodle页面样本测试；目前不声称已实现。
+## ⚖️ 使用须知
 
-## 开发与验证
+- 课件和资料的版权属于学校和任课老师，**只供你本人学习**，不要二次传播；往年试题尤其不要上传。
+- 工具默认每次请求间隔 0.3 秒，请别把间隔改得太小给学校服务器添麻烦。
+- 使用前请遵守西浦关于 Learning Mall 和 IT 资源的使用规定。
+
+<details>
+<summary>🛠 开发者</summary>
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-python -m compileall -q lmcore_sync
 ```
 
-GitHub Actions 在 Windows/Python 3.10和3.12上跑离线测试，不使用学校账号或上传课程资料。离线测试覆盖去重、旧版本保留、网络重试、认证失效、目录保护、报表、ICS和定时配置。真实学校网页变化仍需真实账号验证。
+GitHub Actions 在 Windows + Python 3.10 / 3.12 上跑离线测试（不用学校账号）。网页结构变化仍需要真实账号验证。代码结构：`moodle.py` 浏览器会话与请求、`sync.py` 单门课同步、`courses.py` 课程识别与桌面文件夹、`deadlines.py` DDL 与 Handbook 解析、`calendar_ics.py` 日历、`convert.py` 转 Markdown、`maintenance.py` 定时任务与自检。
+</details>
 
-ZIP 的 AI 解压目录包含内容哈希。ZIP 更新会使用新的目录；旧解压目录为保护已有编辑而保留，可能仍出现在 AI 目录中，请按资料清单指向的当前路径阅读。
+---
+
+<sub>English: an unofficial, student-made tool that syncs **XJTLU Learning Mall Core** course files into tidy per-course folders on your desktop, keeps old versions when lecturers update files, builds a deadline digest (including assessments listed only in the Module Handbook) and an `.ics` calendar, and converts everything to Markdown for AI study assistants. Works with XJTLU SSO via a real Edge browser session; no Moodle API token needed.</sub>

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import deadlines
 from .calendar_ics import build_ics
-from .courses import auto_entries, course_code, resolve_layout, scaffold
+from .courses import auto_entries, course_code, courses_root, current_real_courses, resolve_layout, scaffold
 from .convert import Converter, CONVERTIBLE
 from .moodle import Moodle, LoginExpired
 from .organize import CATEGORIES, MANIFEST, STATE_DIR
@@ -46,7 +46,9 @@ def log(msg: str):
 def load_config() -> dict:
     if CONFIG.exists():
         return json.loads(CONFIG.read_text(encoding="utf-8-sig"))
-    return {"base_url": "https://core.xjtlu.edu.cn", "browser": "msedge", "courses": []}
+    # zero-config default: discover this semester's XJTLU modules and create
+    # one folder per course on the desktop
+    return {"base_url": "https://core.xjtlu.edu.cn", "browser": "msedge", "courses": [], "auto_courses": True}
 
 
 def save_config(cfg: dict):
@@ -151,27 +153,45 @@ async def cmd_setup(cfg, args):
     await ensure_login(cfg)
     async with moodle(cfg) as m:
         await m.is_logged_in()
-        courses = await m.courses()
-    log("\n你已选的课程：")
-    for i, c in enumerate(courses, 1):
-        log(f"  {i:>2}. {c['shortname']}  —  {c['fullname']}")
-    picked = input("\n输入要同步的课程编号或课程代码，用空格分隔（如 1 3 EEE339）：").split()
-    default_root = Path.home() / "Desktop"
-    root = input(f"课程文件夹放在哪个目录下？直接回车 = {default_root}：").strip() or str(default_root)
-    cfg["courses_root"] = root
-    cfg["auto_courses"] = input("以后自动为本学期的新课程建文件夹？[Y/n]：").strip().lower() != "n"
-    cfg["courses"] = []
-    for p in picked:
-        c = courses[int(p) - 1] if p.isdigit() and 0 < int(p) <= len(courses) else match_course(courses, p)
-        if not c:
-            log(f"  !! 找不到 {p}")
-            continue
-        code = course_code(c["shortname"])
-        folder = input(f"  {c['shortname']} 的文件夹（回车 = {Path(root) / code.lower()}）：").strip() or str(Path(root) / code.lower())
-        cfg["courses"].append({"match": c["shortname"], "folder": folder})
-        scaffold(Path(folder).expanduser(), resolve_layout(cfg["courses"][-1], cfg), c, ddl_path(cfg))
+        current = current_real_courses(await m.courses("inprogress"), cfg)
+        everything = await m.courses()
+    if not current:  # e.g. between semesters
+        current = current_real_courses(everything, cfg)
+    log("\n本学期的课程：")
+    for i, c in enumerate(current, 1):
+        log(f"  {i:>2}. {course_code(c['shortname']):<8} {c['fullname']}")
+    raw = input("\n要同步哪些？输入编号或课程代码（空格分隔），直接回车 = 全部：").split()
+    if raw:
+        picked = []
+        for p in raw:
+            c = current[int(p) - 1] if p.isdigit() and 0 < int(p) <= len(current) else match_course(everything, p)
+            if c:
+                picked.append(c)
+            else:
+                log(f"  !! 找不到 {p}")
+    else:
+        picked = list(current)
+    root_default = courses_root(cfg)
+    root = input(f"课程文件夹建在哪里？直接回车 = 桌面（{root_default}）：").strip()
+    cfg["courses_root"] = root or "desktop"
+    cfg["auto_courses"] = input("以后新学期的新课程也自动建文件夹？[Y/n]：").strip().lower() != "n"
+    picked_codes = {course_code(c["shortname"]) for c in picked}
+    # courses you did not pick stay out, also in auto mode
+    cfg["exclude"] = sorted((set(cfg.get("exclude", [])) | {course_code(c["shortname"]) for c in current}) - picked_codes)
+    cfg["courses"] = [e for e in cfg.get("courses", []) if course_code(e["match"]) in picked_codes]
+    cfg["courses"] += auto_entries(cfg, picked)
+    log("")
+    for e in cfg["courses"]:
+        c = match_course(everything, e["match"]) or {"shortname": e["match"]}
+        made = scaffold(Path(e["folder"]).expanduser(), resolve_layout(e, cfg), c, ddl_path(cfg))
+        log(f"  📁 {course_code(e['match']):<8} → {e['folder']}" + ("（新建）" if made else "（已存在，沿用）"))
     save_config(cfg)
-    log(f"\n已保存 {CONFIG}。以后直接运行 sync 即可。")
+    log(f"\n已保存设置：{CONFIG}")
+    if getattr(args, "no_first_sync", False):
+        return
+    if input("现在就开始第一次同步，把课件下载进这些文件夹吗？[Y/n]：").strip().lower() != "n":
+        await cmd_sync(cfg, argparse.Namespace(only=None, refresh=False, videos=False, all_forums=False,
+                                               no_convert=False, non_interactive=False))
 
 
 # folders inside the course whose files are build artefacts, not course material
@@ -309,7 +329,9 @@ async def cmd_sync(cfg, args):
             if new_entries:
                 cfg.setdefault("courses", []).extend(new_entries)
                 save_config(cfg)
-                log(f">> 自动添加 {len(new_entries)} 门课程")
+                log(f">> 发现本学期 {len(new_entries)} 门新课程，自动建文件夹：")
+                for e in new_entries:
+                    log(f"   📁 {course_code(e['match'])} → {e['folder']}")
         failures = 0
         for entry in cfg["courses"]:
             if only and not any(o in norm(entry["match"]) for o in only):
@@ -322,7 +344,9 @@ async def cmd_sync(cfg, args):
             folder = Path(entry["folder"]).expanduser()
             folder.mkdir(parents=True, exist_ok=True)
             layout = resolve_layout(entry, cfg)
-            scaffold(folder, layout, c, ddl_path(cfg))
+            made = scaffold(folder, layout, c, ddl_path(cfg))
+            if made:
+                log(f"   📁 新建：{', '.join(made)}")
             log(f"\n======== {c['shortname']} → {folder}")
             cs = CourseSync(m, c, folder, USER_DATA, {"refresh": args.refresh, "videos": args.videos,
                                                        "all_forums": args.all_forums,
@@ -395,8 +419,10 @@ async def cmd_convert(cfg, args):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="lmcore-sync", description="Learning Mall Core 课件同步工具")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("setup", "login", "courses", "convert"):
+    for name in ("login", "courses", "convert"):
         sub.add_parser(name)
+    st = sub.add_parser("setup", help="首次设置：登录、选课、在桌面建课程文件夹，然后同步")
+    st.add_argument("--no-first-sync", action="store_true", help="设置完不立即同步")
     d = sub.add_parser("ddl")
     d.add_argument("--non-interactive", action="store_true")
     s = sub.add_parser("sync")
