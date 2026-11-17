@@ -8,6 +8,8 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from .moodle import LoginExpired
+
 MONTHS = {m: i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july", "august",
      "september", "october", "november", "december"], 1)}
@@ -23,10 +25,14 @@ def parse_moodle_date(text: str, now: datetime) -> datetime | None:
     hh, mm = int(m.group(4)), int(m.group(5))
     if m.group(6):
         hh = hh % 12 + (12 if m.group(6).upper() == "PM" else 0)
-    if m.group(3):
-        return datetime(int(m.group(3)), mon, day, hh, mm)
-    cands = [datetime(y, mon, day, hh, mm) for y in (now.year - 1, now.year, now.year + 1)]
-    return min(cands, key=lambda d: abs((d - now).total_seconds()))
+    years = [int(m.group(3))] if m.group(3) else [now.year - 1, now.year, now.year + 1]
+    cands = []
+    for year in years:
+        try:
+            cands.append(datetime(year, mon, day, hh, mm))
+        except ValueError:
+            continue
+    return min(cands, key=lambda d: abs((d - local_naive(now)).total_seconds()), default=None)
 
 
 def parse_handbook(html: str, now: datetime) -> list[dict]:
@@ -76,14 +82,31 @@ def parse_handbook(html: str, now: datetime) -> list[dict]:
 
 
 async def collect(m, courses: list[dict]) -> list[dict]:
+    """Return available rows; expose failed sources in m.deadline_warnings.
+
+    Callers must check warnings before replacing a previous complete report.
+    Authentication failures still propagate immediately.
+    """
     now = datetime.now()
     rows: dict[tuple, dict] = {}
+    m.deadline_warnings = []
+
+    def warn(source: str, error: Exception):
+        # Browser exception strings can contain authenticated request URLs.
+        message = f"{source}读取失败（{type(error).__name__}），DDL 数据可能不完整"
+        m.deadline_warnings.append(message)
+        logger = getattr(m, "log", None)
+        if logger:
+            logger(f"   !! {message}")
     # 1) per-course activity index pages (complete list incl. already submitted)
     for c in courses:
         for mod, label in (("assign", "作业"), ("quiz", "测验")):
             try:
                 html, url = await m.html(f"{m.base}/mod/{mod}/index.php?id={c['id']}")
-            except Exception:
+            except LoginExpired:
+                raise
+            except Exception as error:
+                warn(f"{c['shortname']} {label}列表", error)
                 continue
             soup = BeautifulSoup(html, "html.parser")
             table = soup.select_one("#region-main table")
@@ -124,7 +147,10 @@ async def collect(m, courses: list[dict]) -> list[dict]:
                 continue
             body, _, _ = await m.fetch(f"{m.base}/mod/resource/view.php?id={hb['id']}&redirect=1")
             handbook_rows[c["shortname"]] = parse_handbook(body.decode("utf-8", "replace"), now)
-        except Exception:
+        except LoginExpired:
+            raise
+        except Exception as error:
+            warn(f"{c['shortname']} Module Handbook", error)
             continue
     for cs, items in handbook_rows.items():
         for h in items:
@@ -149,7 +175,10 @@ async def collect(m, courses: list[dict]) -> list[dict]:
     for c in courses:
         try:
             cms = await m.course_structure(c["id"])
-        except Exception:
+        except LoginExpired:
+            raise
+        except Exception as error:
+            warn(f"{c['shortname']} 课程考核目录", error)
             continue
         have = [k[1].lower() for k in rows if k[0] == c["shortname"]]
         for cm in cms:
@@ -175,41 +204,71 @@ async def collect(m, courses: list[dict]) -> list[dict]:
             rows[key] = {"course": e["course"]["shortname"], "name": e["name"], "type": e.get("modulename", ""),
                          "due": datetime.fromtimestamp(e["timesort"]), "due_text": "",
                          "status": "待完成" + ("（已过期）" if e.get("overdue") else ""), "url": e.get("url", "")}
-    except Exception:
-        pass
+    except LoginExpired:
+        raise
+    except Exception as error:
+        warn("Moodle 时间线", error)
     return sorted(rows.values(), key=lambda r: r["due"] or datetime.max)
 
 
 def is_done(status: str) -> bool:
-    s = status.lower()
-    return any(k in s for k in ("submitted", "已提交", "finished", "graded")) and "no submission" not in s
+    """Treat explicit negative / draft states as pending, including 'not graded'."""
+    s = (status or "").lower()
+    if re.search(r"not\s+(?:yet\s+)?(?:submitted|finished|graded)|no\s+submission|unsubmitted|unfinished|ungraded|draft|未提交|尚未提交|未完成|未评分|草稿", s):
+        # A submitted item can still be awaiting grading.
+        return bool(re.search(r"\bsubmitted\s+for\s+grading\b|已提交", s)) and not re.search(
+            r"not\s+(?:yet\s+)?submitted|no\s+submission|unsubmitted|未提交|草稿|draft", s)
+    return bool(re.search(r"\b(?:submitted|finished|graded)\b|已提交|已完成|已评分", s))
 
 
-def render(rows: list[dict], extra: list[dict] | None = None) -> str:
-    now = datetime.now()
-    for x in extra or []:  # manual entries from config.json ("extra_deadlines")
-        # a manual entry replaces an auto-detected "no due date" row of the same item
+def local_naive(value: datetime | None) -> datetime | None:
+    """All report comparisons use the computer's local time, as Moodle text does.
+
+    Explicit ISO offsets are converted to local time before removing tzinfo.
+    A date with no offset already represents local wall time.
+    """
+    if value is not None and value.tzinfo is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value
+
+
+def merge_extra(rows: list[dict], extra: list[dict] | None) -> list[dict]:
+    """Apply manual corrections once; repeated calls are idempotent.
+
+    Keeps the historical in-place list API, but never mutates caller row dicts.
+    Explicit names / 'replaces' determine replacement, not merely a shared date.
+    """
+    rows[:] = [{**r, "due": local_naive(r.get("due"))} for r in rows]
+    course_key = lambda value: re.split(r"[-_\s]", value or "")[0].casefold()
+    for x in extra or []:
         reps = x.get("replaces") or []
         reps = [reps] if isinstance(reps, str) else reps
+        raw_due = x.get("due", "")
         try:
-            xday = datetime.fromisoformat(x["due"]).date()
-        except Exception:
-            xday = None
-        same_course = lambda r: r["course"][:6].lower() == x.get("course", "")[:6].lower()
-        rows[:] = [r for r in rows if not (
-            (r.get("unknown") or r.get("from_handbook")) and same_course(r) and (
-                any(k.lower() in r["name"].lower() for k in reps)
-                or (xday and r["due"] and r["due"].date() == xday)))]
-        try:
-            due = datetime.fromisoformat(x["due"])
-            if len(x["due"]) == 10:          # date only -> sort at end of that day
+            due = local_naive(datetime.fromisoformat(raw_due.replace("Z", "+00:00")))
+            if len(raw_due) == 10:
                 due = due.replace(hour=23, minute=59)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             due = None
-        rows.append({"date_only": len(x.get("due", "")) == 10, "course": x.get("course", ""), "name": x.get("name", ""), "type": x.get("type", "手动添加"),
-                     "due": due, "due_text": x.get("note", ""), "status": x.get("status", ""), "url": x.get("url", ""),
-                     "weight": x.get("weight", "")})
+        name = x.get("name", "")
+        rows[:] = [r for r in rows if not (
+            course_key(r.get("course")) == course_key(x.get("course")) and (
+                r.get("name", "").casefold() == name.casefold()
+                or any(str(k).casefold() in r.get("name", "").casefold() for k in reps if k)))]
+        rows.append({"date_only": isinstance(raw_due, str) and len(raw_due) == 10,
+                     "course": x.get("course", ""), "name": name, "type": x.get("type", "手动添加"),
+                     "due": due, "due_text": x.get("note", ""), "status": x.get("status", ""),
+                     "url": x.get("url", ""), "weight": x.get("weight", ""),
+                     "unknown": due is None, "exam": x.get("exam", False)})
     rows.sort(key=lambda r: r["due"] or datetime.max)
+    return rows
+
+
+def render(rows: list[dict], extra: list[dict] | None = None, recent: list[dict] | None = None,
+           notice: str = "", base_dir: Path | None = None) -> str:
+    """recent: [{course, date, status, path(Path), title}] – files added/updated lately."""
+    now = datetime.now()
+    rows = merge_extra([dict(r) for r in rows], extra)
     link = lambda r: f"[{r['name']}]({r['url']})" if r.get("url") else r["name"]
 
     def left(d):
@@ -235,12 +294,32 @@ def render(rows: list[dict], extra: list[dict] | None = None) -> str:
         if r.get("weight") and r["weight"] not in r["name"]:
             r["name"] = f"{r['name']}（占总评 {r['weight']}）"
     out = [f"# 作业 DDL 汇总", "", f"更新时间：{now:%Y-%m-%d %H:%M}（来源：Learning Mall Core，每次同步自动刷新）", ""]
+    if notice:
+        out += [f"> ⚠ **{notice}**", ""]
     todo = [r for r in upcoming if not is_done(r["status"])]
     if todo:
         out += ["## ⚠ 待办（还没交的作业 / 还没考的考试）", ""]
         out += [f"- **{when(r, False)}** · {r['course'].split('-')[0]} · {r['name']}（剩 {left(r['due'])}）"
                 + (f" — {r['due_text']}" if r.get("due_text") and r.get("type") != "作业" else "") for r in todo]
         out.append("")
+    if recent:
+        import os
+        out += [f"## 📥 最近 7 天新增 / 更新的资料（{len(recent)} 个）", ""]
+        by_course: dict[str, list[dict]] = {}
+        for x in sorted(recent, key=lambda x: (x["course"], x.get("date", "")), reverse=True):
+            by_course.setdefault(x["course"].split("-")[0], []).append(x)
+        for code, items in sorted(by_course.items()):
+            out.append(f"**{code}**")
+            for x in items[:15]:
+                try:
+                    rel = os.path.relpath(x["path"], base_dir).replace("\\", "/") if base_dir else str(x["path"])
+                except ValueError:  # different Windows drives cannot use relative links
+                    rel = Path(x["path"]).resolve().as_uri()
+                tag = "🆕" if x["status"] == "新下载" else "↻ 更新"
+                out.append(f"- {tag} {x.get('date', '')} [{Path(x['path']).name}](<{rel}>)")
+            if len(items) > 15:
+                out.append(f"- …还有 {len(items) - 15} 个，见该课程的 `00_资料清单.md`")
+            out.append("")
     if unknown:
         out += ["## ❓ 有考核但 Moodle 上没有截止时间（务必自己确认）", "",
                 "这些在课程页面上像是作业/考试，但没有 Moodle 作业提交入口（常见于机房上机测试、线下考试）。"

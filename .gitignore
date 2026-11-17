@@ -3,3 +3,11 @@ config.json
 .venv/
 __pycache__/
 *.pyc
+
+.turntrail/
+AI_LOG.md
+AI_HANDOFF.md
+AI_MEMORY.md
+PLAN.md
+dist/
+*.log

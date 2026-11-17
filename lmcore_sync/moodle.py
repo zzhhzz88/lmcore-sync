@@ -7,9 +7,11 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import unquote, urlparse, parse_qs, urlencode
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, BrowserContext, Page
@@ -61,9 +63,24 @@ class Item:
     extra: dict = field(default_factory=dict)
 
 
+class LoginExpired(RuntimeError):
+    """The saved school session must be renewed interactively."""
+
+
+class _HTTPError(RuntimeError):
+    def __init__(self, status: int, retry_after: str = ""):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.retry_after = retry_after
+
+
 class Moodle:
-    def __init__(self, base: str, profile_dir: Path, browser: str = "msedge", headless: bool = True, log=print):
+    def __init__(self, base: str, profile_dir: Path, browser: str = "msedge", headless: bool = True, log=print,
+                 delay: float = 0.3, retries: int = 3):
         self.base = base.rstrip("/")
+        self.delay = max(0.0, float(delay))
+        self.retries = max(0, int(retries))
+        self._structure_cache: dict[int, list[dict]] = {}
         self.profile_dir = profile_dir
         self.browser = browser
         self.headless = headless
@@ -166,41 +183,103 @@ class Moodle:
             await asyncio.sleep(2)
         return False
 
+    def _check_auth(self, url: str, html: str = ""):
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        if re.search(r"/(login(?:\.php|/|$)|saml(?:2)?(?:/|$)|adfs/ls|oauth2?/authorize|cas/login)", path) or re.search(
+                r"<input[^>]+type\s*=\s*['\"]password['\"]", html, re.I):
+            raise LoginExpired("登录状态失效，请运行 python -m lmcore_sync login。")
+
+    def _check_response(self, response):
+        self._check_auth(response.url)
+        if response.status == 401:
+            raise LoginExpired("登录状态失效，请重新登录。")
+        if response.status >= 400:
+            raise _HTTPError(response.status, response.headers.get("retry-after", ""))
+
     async def ajax(self, method: str, args: dict):
-        res = await self.page.evaluate(
-            """async ([sk, method, args]) => {
-                const r = await fetch('/lib/ajax/service.php?sesskey=' + sk + '&info=' + method, {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify([{index: 0, methodname: method, args: args}])});
-                return await r.json();
-            }""",
-            [self.sesskey, method, args],
-        )
-        if isinstance(res, dict) and res.get("error"):
-            raise RuntimeError(f"{method}: {res}")
-        r0 = res[0]
-        if r0.get("error"):
-            raise RuntimeError(f"{method}: {r0.get('exception')}")
-        return r0["data"]
+        async def go():
+            endpoint = self.base + "/lib/ajax/service.php?" + urlencode({"sesskey": self.sesskey, "info": method})
+            # APIRequestContext shares the browser's cookies and is independent
+            # of whichever external page the browser last visited.
+            response = await self.ctx.request.post(endpoint,
+                data=json.dumps([{"index": 0, "methodname": method, "args": args}]),
+                headers={"Content-Type": "application/json"}, timeout=PAGE_TIMEOUT)
+            try:
+                self._check_response(response)
+                body = await response.text()
+                self._check_auth(response.url, body)
+                res = json.loads(body)
+                r0 = res if isinstance(res, dict) else res[0]
+                if r0.get("error"):
+                    exc = r0.get("exception") or r0
+                    if re.search(r"invalidsesskey|requirelogin|requireslogin|notloggedin|sessionexpired", str(exc), re.I):
+                        raise LoginExpired("登录状态失效，请重新登录。")
+                    raise RuntimeError(f"{method}: {exc}")
+                return r0["data"]
+            finally:
+                await response.dispose()
+        return await self._retry(method, go)
 
     # ------------------------------------------------------------------ courses
-    async def courses(self) -> list[dict]:
+    async def courses(self, classification: str = "all") -> list[dict]:
+        """classification: all | inprogress (this semester) | past | future"""
         data = await self.ajax(
             "core_course_get_enrolled_courses_by_timeline_classification",
-            {"offset": 0, "limit": 0, "classification": "all", "sort": "fullname"},
+            {"offset": 0, "limit": 0, "classification": classification, "sort": "fullname"},
         )
         return [
             {"id": c["id"], "shortname": c.get("shortname", ""), "fullname": c.get("fullname", ""),
-             "url": c.get("viewurl", f"{self.base}/course/view.php?id={c['id']}")}
+             "url": c.get("viewurl", f"{self.base}/course/view.php?id={c['id']}"),
+             "startdate": c.get("startdate", 0), "enddate": c.get("enddate", 0)}
             for c in data["courses"]
         ]
 
+    async def _retry(self, what: str, fn):
+        for attempt in range(self.retries + 1):
+            try:
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                return await fn()
+            except LoginExpired:
+                raise
+            except Exception as e:
+                retryable = (isinstance(e, _HTTPError) and (e.status in (408, 429) or 500 <= e.status <= 599)) or bool(
+                    re.search(r"ENOTFOUND|ECONNRESET|ETIMEDOUT|Timeout|ERR_NETWORK|ERR_CONNECTION|ERR_NAME|socket|ECONNREFUSED", str(e), re.I))
+                if attempt == self.retries or not retryable:
+                    raise
+                wait = 2 ** attempt * 2
+                retry_after = getattr(e, "retry_after", "")
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        try:
+                            when = parsedate_to_datetime(retry_after)
+                            wait = (when - datetime.now(timezone.utc)).total_seconds()
+                        except (TypeError, ValueError):
+                            pass
+                wait = max(0, min(wait, 60))
+                self.log(f"      (网络问题，{wait:g}s 后重试 {attempt + 1}/{self.retries}: {str(e)[:80]})")
+                await asyncio.sleep(wait)
+
     async def html(self, url: str) -> tuple[str, str]:
-        resp = await self.page.goto(url, wait_until="domcontentloaded")
-        return await self.page.content(), self.page.url
+        async def go():
+            response = await self.page.goto(url, wait_until="domcontentloaded")
+            if response is not None:
+                self._check_response(response)
+            content = await self.page.content()
+            self._check_auth(self.page.url, content)
+            return content, self.page.url
+        return await self._retry(url, go)
 
     async def course_structure(self, course_id: int) -> list[dict]:
         """Returns a list of activities: {id, name, modname, url, section}."""
+        if course_id not in self._structure_cache:
+            self._structure_cache[course_id] = await self._course_structure(course_id)
+        return self._structure_cache[course_id]
+
+    async def _course_structure(self, course_id: int) -> list[dict]:
         try:
             raw = await self.ajax("core_courseformat_get_state", {"courseid": course_id})
             state = json.loads(raw)
@@ -217,6 +296,8 @@ class Moodle:
                     })
             if out:
                 return out
+        except LoginExpired:
+            raise
         except Exception as e:
             self.log(f"   (getstate 不可用，改用页面解析: {e})")
         return await self._structure_from_html(course_id)
@@ -239,18 +320,27 @@ class Moodle:
 
     # ------------------------------------------------------------------ files
     async def head(self, url: str) -> tuple[str, dict]:
-        r = await self.ctx.request.fetch(url, method="HEAD", max_redirects=10, timeout=PAGE_TIMEOUT)
-        return r.url, dict(r.headers)
+        async def go():
+            r = await self.ctx.request.fetch(url, method="HEAD", max_redirects=10, timeout=PAGE_TIMEOUT)
+            try:
+                self._check_response(r)
+                return r.url, dict(r.headers)
+            finally:
+                await r.dispose()
+        return await self._retry(url, go)
 
     async def fetch(self, url: str) -> tuple[bytes, str, dict]:
-        r = await self.ctx.request.get(url, max_redirects=10, timeout=DL_TIMEOUT)
-        if not r.ok:
-            raise RuntimeError(f"HTTP {r.status}")
-        body = await r.body()
-        headers = dict(r.headers)
-        final = r.url
-        await r.dispose()
-        return body, final, headers
+        async def go():
+            r = await self.ctx.request.get(url, max_redirects=10, timeout=DL_TIMEOUT)
+            try:
+                self._check_response(r)
+                body = await r.body()
+                if looks_like_html(body):
+                    self._check_auth(r.url, body.decode("utf-8", "replace"))
+                return body, r.url, dict(r.headers)
+            finally:
+                await r.dispose()
+        return await self._retry(url, go)
 
 
 def filename_from(url: str, headers: dict, hint: str = "") -> str:

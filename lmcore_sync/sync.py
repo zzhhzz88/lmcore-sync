@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
-from .moodle import Moodle, filename_from, looks_like_html, pluginfile_links
+from .moodle import LoginExpired, Moodle, filename_from, looks_like_html, pluginfile_links
 from .organize import (AI_DIR, CATEGORIES, MANIFEST, STATE_DIR, ExistingIndex, assignment_folder,
                        classify, safe_name, sha256_bytes)
 
@@ -20,6 +21,21 @@ AI_DIRNAME = AI_DIR
 SKIP_MODS = {"label", "quiz", "lti", "choice", "feedback", "attendance", "zoom", "questionnaire",
              "scheduler", "chat", "glossary", "workshop", "h5pactivity", "subsection", "qbank", "bigbluebuttonbn"}
 MAX_MB = 400
+
+
+def file_key(url: str) -> str:
+    parts = urlsplit(url)
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                       if k not in {"forcedownload", "redirect"}])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def stable_key(url: str) -> str:
+    """pluginfile URLs carry a revision/item id that changes when the teacher
+    re-uploads a file: /pluginfile.php/<ctx>/<component>/<area>/<rev>/<name>.
+    Only mod_resource/content has a revision here. Forum and submission IDs
+    identify different items and must not be collapsed."""
+    return re.sub(r"(pluginfile\.php/\d+/mod_resource/content/)\d+/", r"\g<1>0/", file_key(url))
 
 
 def norm(s: str) -> str:
@@ -52,6 +68,8 @@ class CourseSync:
         self.skipped_mods: list[tuple[str, str, str]] = []
         self.touched: set[str] = set()
         self.written: set[Path] = set()
+        self._failed = False
+        self._complete = False
 
     # --------------------------------------------------------------- helpers
     def assign_dir(self, name: str) -> str:
@@ -83,29 +101,76 @@ class CourseSync:
         except ValueError:
             return str(p)
 
+    @staticmethod
+    def _write_atomic(path: Path, body: bytes):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".lmcore-", delete=False) as f:
+            temp = Path(f.name)
+            try:
+                f.write(body)
+            except BaseException:
+                f.close()
+                temp.unlink(missing_ok=True)
+                raise
+        try:
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def _archive(self, path: Path, old: dict):
+        archive = path.parent / "_旧版本"
+        archive.mkdir(exist_ok=True)
+        stem, ext = os.path.splitext(path.name)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        name = f"{stem}_{stamp}_{old['sha'][:8]}"
+        i = 0
+        while True:
+            kept = archive / f"{name}{f'_{i}' if i else ''}{ext}"
+            try:
+                with kept.open("xb") as f:
+                    f.write(path.read_bytes())
+                return kept
+            except FileExistsError:
+                i += 1
+
+    def _record_file(self, key: str, rec: dict):
+        # Remove obsolete resource revisions only after their replacement succeeded.
+        for old_key in list(self.state["items"]):
+            if old_key != key and stable_key(old_key) == stable_key(key):
+                del self.state["items"][old_key]
+        self.state["items"][key] = {k: v for k, v in rec.items() if k != "section"}
+        self.rows.append(rec)
+
     async def save_file(self, url: str, title: str, section: str, modname: str, sub: str = "", cat: str | None = None):
         if "/mod/resource/view.php" in url:
-            # resolve to the real pluginfile URL; it contains the file revision,
-            # so a teacher's updated upload gets a new key and is fetched again
             try:
                 final, hdrs = await self.m.head(url)
                 if "pluginfile.php" in final:
                     url = final
+            except LoginExpired:
+                raise
             except Exception:
-                pass
-        key = url.split("?")[0]
+                pass  # Some servers reject HEAD; GET still resolves the resource.
+        key = file_key(url)
         self.touched.add(key)
         prev = self.state["items"].get(key)
-        if prev and not self.opts.get("refresh"):
+        if prev and not self.opts.get("refresh") and prev.get("path"):
             p = self.folder / prev["path"]
-            if p.exists():
-                self.rows.append({**prev, "status": prev["status"], "section": section, "title": title})
+            if p.is_file() and prev.get("sha") == sha256_bytes(p.read_bytes()):
+                self.rows.append({**prev, "status": "已有(未变化)", "section": section, "title": title})
                 return
         try:
             body, final, headers = await self.m.fetch(url)
+        except LoginExpired:
+            raise
         except Exception as e:
+            self._failed = True
             self.rows.append({"title": title, "section": section, "status": f"失败: {e}", "path": "", "url": url, "cat": cat or "other"})
             return
+        if "pluginfile.php" in final:
+            key = file_key(final)
+            self.touched.add(key)
+            prev = self.state["items"].get(key) or prev
         ctype = headers.get("content-type", "").lower()
         fname = filename_from(final, headers, title)
         if ctype.startswith(("video/", "audio/")) and not self.opts.get("videos"):
@@ -118,19 +183,44 @@ class CourseSync:
             return "html"
         digest = sha256_bytes(body)
         cat = cat or classify(title, fname, section, modname=modname)
+        today = datetime.now().strftime("%Y-%m-%d")
+        old = prev or next((v for k, v in reversed(list(self.state["items"].items()))
+                           if stable_key(k) == stable_key(key) and v.get("sha") and v.get("path")), None)
+        if old and old.get("path") and old.get("sha") != digest:
+            old_path = self.folder / old["path"]
+            managed = old.get("managed", old.get("status") in ("新下载", "已更新"))
+            if managed and old_path.is_file() and sha256_bytes(old_path.read_bytes()) == old["sha"]:
+                self._archive(old_path, old)
+                self._write_atomic(old_path, body)
+                self.written.add(old_path)
+                self.existing.add(old_path, digest, len(body))
+                self.log(f"      ↻ {self._rel(old_path)}（老师更新了文件，旧版在 _旧版本/）")
+                rec = {"title": title, "section": section, "status": "已更新", "path": self._rel(old_path), "url": url,
+                       "cat": cat, "sha": digest, "date": today, "managed": True}
+                self._record_file(key, rec)
+                return
         hit = self.existing.find(digest, fname, len(body))
-        if hit is not None and hit not in self.written:
-            rec = {"title": title, "section": section, "status": "已有(未重复下载)", "path": self._rel(hit), "url": url, "cat": cat, "sha": digest}
+        # Name/size alone are not identity. Recheck the content because a file
+        # may have been edited or replaced since the index was scanned.
+        if hit is not None and (not hit.is_file() or sha256_bytes(hit.read_bytes()) != digest):
+            hit = None
+        if hit is not None:
+            unchanged = old and old.get("sha") == digest
+            rec = {"title": title, "section": section, "status": "已有(未重复下载)", "path": self._rel(hit),
+                   "url": url, "cat": cat, "sha": digest, "date": (old or {}).get("date", ""),
+                   "managed": bool(unchanged and old.get("managed", old.get("status") in ("新下载", "已更新")))}
+            if unchanged:
+                rec["status"] = old.get("status", rec["status"])
         else:
-            target = hit if hit is not None else self._target_path(cat, sub, fname, digest)
+            target = self._target_path(cat, sub, fname, digest)
             if not target.exists():
-                target.write_bytes(body)
+                self._write_atomic(target, body)
                 self.written.add(target)
                 self.existing.add(target, digest, len(body))
                 self.log(f"      + {self._rel(target)}")
-            rec = {"title": title, "section": section, "status": "新下载", "path": self._rel(target), "url": url, "cat": cat, "sha": digest}
-        self.state["items"][key] = {k: rec[k] for k in ("title", "status", "path", "url", "cat", "sha")}
-        self.rows.append(rec)
+            rec = {"title": title, "section": section, "status": "已更新" if old else "新下载", "path": self._rel(target),
+                   "url": url, "cat": cat, "sha": digest, "date": today, "managed": True}
+        self._record_file(key, rec)
 
     def write_note(self, cat: str, name: str, md: str, section: str, title: str, url: str, sub: str = ""):
         d = self.out / self.layout[cat]
@@ -209,6 +299,8 @@ class CourseSync:
             if final.startswith(self.m.base):
                 a = BeautifulSoup(html, "html.parser").select_one(".urlworkaround a, #region-main a[href]")
                 link = a["href"] if a else final
+        except LoginExpired:
+            raise
         except Exception:
             link = cm.get("url", "")
         if "pluginfile.php" in link and link.startswith(self.m.base):
@@ -276,14 +368,20 @@ class CourseSync:
                     await self.do_forum(cm)
                 else:
                     self.skipped_mods.append((cm["section"], cm["name"], mod))
+            except LoginExpired:
+                self._failed = True
+                self.save_state()
+                raise
             except Exception as e:
+                self._failed = True
                 self.log(f"      !! {type(e).__name__}: {e}")
                 self.rows.append({"title": cm["name"], "section": cm["section"], "status": f"失败: {e}", "path": "", "url": cm.get("url", ""), "cat": "other"})
+        self._complete = True
         self.save_state()
 
     def save_state(self):
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        if self.touched:  # forget entries that no longer exist on Moodle / old revisions
+        if self._complete and not self._failed and self.touched:  # only prune after a complete successful scan
             self.state["items"] = {k: v for k, v in self.state["items"].items() if k in self.touched}
         self.state["last_sync"] = datetime.now().isoformat(timespec="seconds")
         self.state["course"] = self.course
