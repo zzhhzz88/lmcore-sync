@@ -283,8 +283,8 @@ def render(rows: list[dict], extra: list[dict] | None = None, recent: list[dict]
     def when(r, full=True):
         d = r["due"]
         if r.get("date_only"):
-            return f"{d:%Y-%m-%d %a} 时间待定" if full else f"{d:%m月%d日 %a}（时间待定）"
-        return f"{d:%Y-%m-%d %a %H:%M}" if full else f"{d:%m月%d日 %a %H:%M}"
+            return f"{d:%Y-%m-%d %a} 时间待定" if full else f"{d.month:02d}月{d.day:02d}日 {d:%a}（时间待定）"
+        return f"{d:%Y-%m-%d %a %H:%M}" if full else f"{d.month:02d}月{d.day:02d}日 {d:%a %H:%M}"
 
     unknown = [r for r in rows if r.get("unknown")]
     exams = [r for r in rows if r.get("exam") and not r["due"]]
