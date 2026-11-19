@@ -3,6 +3,7 @@ de-duplication against files the user already has in the course folder."""
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import re
 from pathlib import Path
@@ -58,7 +59,8 @@ INVALID = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
 
 def safe_name(name: str, maxlen: int = 120) -> str:
-    name = INVALID.sub("_", name or "").strip().strip(".")
+    name = html.unescape(name or "")      # Moodle titles arrive as "Q&amp;A"
+    name = INVALID.sub("_", name).strip().strip(".")
     name = re.sub(r"\s+", " ", name)
     if len(name) > maxlen:
         stem, dot, ext = name.rpartition(".")

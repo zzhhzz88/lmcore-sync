@@ -345,9 +345,9 @@ async def cmd_sync(cfg, args):
             folder.mkdir(parents=True, exist_ok=True)
             layout = resolve_layout(entry, cfg)
             made = scaffold(folder, layout, c, ddl_path(cfg))
+            log(f"\n======== {c['shortname']} → {folder}")
             if made:
                 log(f"   📁 新建：{', '.join(made)}")
-            log(f"\n======== {c['shortname']} → {folder}")
             cs = CourseSync(m, c, folder, USER_DATA, {"refresh": args.refresh, "videos": args.videos,
                                                        "all_forums": args.all_forums,
                                                        "layout": layout}, log=log)

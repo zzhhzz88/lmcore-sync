@@ -17,9 +17,34 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, BrowserContext, Page
 
 import os
+import sys
 import shutil
 import socket
 import subprocess
+
+
+def _kill_profile_browsers(profile_dir: Path) -> int:
+    """End browser processes that use *our* private profile (never the user's
+    normal Edge/Chrome, which runs with a different --user-data-dir)."""
+    if sys.platform != "win32":
+        return 0
+    marker = str(Path(profile_dir).resolve()).lower()
+    # UTF-8 output, otherwise non-ASCII profile paths come back in the console code page
+    script = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+              "Get-CimInstance Win32_Process -Filter \"name='msedge.exe' or name='chrome.exe' or name='chromium.exe'\" | "
+              "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True,
+                             timeout=30, encoding="utf-8", errors="replace").stdout
+    except Exception:
+        return 0
+    killed = 0
+    for line in out.splitlines():
+        pid, _, cmd = line.partition("\t")
+        if marker in cmd.lower().replace('"', "") and pid.strip().isdigit():
+            subprocess.run(["taskkill", "/PID", pid.strip(), "/T", "/F"], capture_output=True)
+            killed += 1
+    return killed
 
 
 def _free_port() -> int:
@@ -94,13 +119,24 @@ class Moodle:
     async def __aenter__(self):
         """Start a *normal* browser process (no automation flags, so SSO pages
         that detect webdriver still render) and attach to it over CDP."""
+        # Proxy tools (Clash, v2rayN ...) often set HTTP(S)_PROXY. Playwright would
+        # then send the local DevTools handshake through the proxy (-> HTTP 502).
+        bypass = {"127.0.0.1", "localhost", "::1"}
+        for var in ("NO_PROXY", "no_proxy"):
+            have = {x.strip() for x in os.environ.get(var, "").split(",") if x.strip()}
+            os.environ[var] = ",".join(sorted(have | bypass))
         self._pw = await async_playwright().start()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         exe = find_browser(self.browser) or self._pw.chromium.executable_path
         port = _free_port()
+        # A browser left over from an interrupted run keeps the profile locked;
+        # a new launch would just hand off to it and never open our port.
+        _kill_profile_browsers(self.profile_dir)
         args = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={self.profile_dir}",
                 "--no-first-run", "--no-default-browser-check", "--disable-sync",
-                "--window-size=1200,900"]
+                "--window-size=1200,900",
+                # Edge otherwise relaunches itself, so the PID we hold would not be the browser
+                "--edge-skip-compat-layer-relaunch"]
         if self.headless:
             args.append("--headless=new")
         args.append("about:blank")
@@ -114,6 +150,8 @@ class Moodle:
                 last = e
                 await asyncio.sleep(0.5)
         else:
+            self._stop_browser()
+            await self._pw.stop()
             raise RuntimeError(f"无法连接浏览器: {last}")
         self.ctx = self._browser.contexts[0]
         await self.load_cookies()
@@ -144,13 +182,17 @@ class Moodle:
                 await self._browser.close()
             except Exception:
                 pass
-            try:
-                self._proc.terminate()
-                self._proc.wait(timeout=10)
-            except Exception:
-                pass
+            self._stop_browser()
         finally:
             await self._pw.stop()
+
+    def _stop_browser(self):
+        try:
+            self._proc.terminate()
+            self._proc.wait(timeout=10)
+        except Exception:
+            pass
+        _kill_profile_browsers(self.profile_dir)
 
     async def _read_sesskey(self) -> str:
         try:
