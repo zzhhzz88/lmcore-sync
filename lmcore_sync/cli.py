@@ -69,7 +69,8 @@ async def ensure_login(cfg, non_interactive=False) -> None:
     log(">> 需要登录：已打开浏览器窗口，请用学校账号登录（登录完成后会自动继续，最多等 15 分钟）")
     async with moodle(cfg, headless=False) as m:
         if not await m.wait_for_login():
-            raise SystemExit("登录超时。")
+            # LoginExpired (not a bare exit) so the DDL report gets the "please log in" notice
+            raise LoginExpired("15 分钟内没有完成登录，本次没有同步。请双击『同步课件.cmd』重新登录。")
     log(">> 登录成功，登录状态已保存在 user_data/（只属于你本人，不要拷给别人）")
 
 
@@ -316,7 +317,7 @@ def write_manifest(folder: Path, course: dict, cs: CourseSync | None, rows: list
 async def cmd_sync(cfg, args):
     if not cfg.get("courses") and not cfg.get("auto_courses"):
         raise SystemExit("还没有配置课程，请先运行 setup。")
-    await ensure_login(cfg, args.non_interactive)
+    await ensure_login(cfg, args.non_interactive and not getattr(args, "login_popup", False))
     conv = Converter(cfg.get("filee_path"), log=log)
     log(f">> AI 可读版转换引擎：{conv.engine}")
     only = {norm(x) for x in (args.only or [])}
@@ -389,7 +390,7 @@ async def write_ddl(cfg, m, courses):
 
 
 async def cmd_ddl(cfg, args):
-    await ensure_login(cfg, args.non_interactive)
+    await ensure_login(cfg, args.non_interactive and not getattr(args, "login_popup", False))
     async with moodle(cfg) as m:
         if not await m.is_logged_in():
             raise LoginExpired("登录状态失效，请运行 login。")
@@ -432,6 +433,8 @@ def main(argv=None):
     s.add_argument("--all-forums", action="store_true", help="所有讨论区都存档（默认只存公告）")
     s.add_argument("--no-convert", action="store_true", help="不生成 AI 可读版")
     s.add_argument("--non-interactive", action="store_true", help="登录失效时退出并保留上次结果，不弹登录窗口")
+    s.add_argument("--login-popup", action="store_true",
+                   help="配合 --non-interactive（定时任务）：登录失效时仍弹出登录窗口等你 15 分钟")
     sub.add_parser("doctor", help="检查本地运行环境")
     sch = sub.add_parser("schedule", help="Windows 每日定时同步")
     sch.add_argument("action", choices=["install", "remove", "status"])

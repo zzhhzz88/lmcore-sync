@@ -200,15 +200,28 @@ class Moodle:
         except Exception:
             return ""
 
-    async def is_logged_in(self) -> bool:
+    async def is_logged_in(self, settle_s: int = 25) -> bool:
+        """True if Moodle accepts the saved session. An expired Moodle session
+        is often renewed silently by the school SSO (redirect to the identity
+        provider and back via an auto-submitted SAML form), so follow the
+        redirects for a while instead of judging the first page."""
         await self.page.goto(f"{self.base}/my/courses.php", wait_until="domcontentloaded")
-        url = self.page.url
-        if not url.startswith(self.base) or "/login" in url:
-            return False
-        self.sesskey = await self._read_sesskey()
-        if self.sesskey:
-            await self.save_cookies()  # keep refreshed cookies
-        return bool(self.sesskey)
+        t0 = time.time()
+        while True:
+            url = self.page.url
+            if url.startswith(self.base) and "/login" not in url and "saml" not in url.lower():
+                self.sesskey = await self._read_sesskey()
+                if self.sesskey:
+                    await self.save_cookies()  # keep refreshed cookies
+                    return True
+            try:  # a visible password box = the SSO really wants a password
+                if await self.page.locator("input[type=password]").count():
+                    return False
+            except Exception:
+                pass
+            if time.time() - t0 > settle_s:
+                return False
+            await asyncio.sleep(1)
 
     async def wait_for_login(self, timeout_s: int = 900) -> bool:
         """Leave the (visible) browser on the login page until the user is in."""

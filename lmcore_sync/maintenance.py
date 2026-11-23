@@ -90,7 +90,7 @@ def build_task_xml(home: Path, at: str, user: str, executable: Path | None = Non
         child(settings, key, value)
     action = child(child(task, "Actions", Context="CurrentUser"), "Exec")
     child(action, "Command", str(exe))
-    child(action, "Arguments", "-m lmcore_sync sync --non-interactive")
+    child(action, "Arguments", "-m lmcore_sync sync --non-interactive --login-popup")
     child(action, "WorkingDirectory", str(home))
     return '<?xml version="1.0" encoding="UTF-16"?>\n' + ET.tostring(task, encoding="unicode")
 
@@ -141,7 +141,7 @@ def schedule(action: str, home: Path, at: str = "09:00", log=print) -> int:
                 start = tree.findtext(f"{{{NS}}}Triggers/{{{NS}}}CalendarTrigger/{{{NS}}}StartBoundary", "未知")
                 enabled = tree.findtext(f"{{{NS}}}Settings/{{{NS}}}Enabled", "true")
                 log(f"任务：{name}\n每天：{start[11:16] if 'T' in start else start}（系统本地时间）\n启用：{enabled}\n项目：{home}")
-                log("仅在当前 Windows 用户已登录时运行；不会自动登录学校网站。")
+                log("仅在当前 Windows 用户已登录时运行；学校登录过期时会弹出登录窗口。")
             return 0
         if action == "remove":
             if existing:
@@ -165,7 +165,7 @@ def schedule(action: str, home: Path, at: str = "09:00", log=print) -> int:
             _run(*args)
         log(f"已{'更新' if existing else '启用'}定时同步：每天 {at}（系统本地时间），任务 {name}")
         log("仅在当前 Windows 用户已登录时运行，错过时间后可补跑；不会唤醒电脑。")
-        log("登录失效时会退出并提示重新运行 login；运行记录见 user_data/last_sync.log。")
+        log("学校登录过期时会弹出登录窗口，等你 15 分钟；没登录就在作业DDL.md 顶部提示。运行记录见 user_data/last_sync.log。")
         return 0
     except (OSError, ValueError, RuntimeError, ET.ParseError, subprocess.SubprocessError) as exc:
         log(f"定时同步失败：{exc}")

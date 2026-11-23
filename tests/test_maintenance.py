@@ -25,7 +25,7 @@ class MaintenanceTests(unittest.TestCase):
         ns = {"s": m.NS}
         self.assertEqual(tree.findtext("s:Actions/s:Exec/s:Command", namespaces=ns), str(exe))
         self.assertEqual(tree.findtext("s:Actions/s:Exec/s:WorkingDirectory", namespaces=ns), str(home.resolve()))
-        self.assertEqual(tree.findtext("s:Actions/s:Exec/s:Arguments", namespaces=ns), "-m lmcore_sync sync --non-interactive")
+        self.assertEqual(tree.findtext("s:Actions/s:Exec/s:Arguments", namespaces=ns), "-m lmcore_sync sync --non-interactive --login-popup")
         self.assertEqual(tree.findtext("s:Principals/s:Principal/s:LogonType", namespaces=ns), "InteractiveToken")
         self.assertEqual(tree.findtext("s:Triggers/s:CalendarTrigger/s:StartBoundary", namespaces=ns), "2026-11-17T09:23:00")
         self.assertEqual(tree.findtext("s:Settings/s:MultipleInstancesPolicy", namespaces=ns), "IgnoreNew")
