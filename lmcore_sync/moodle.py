@@ -72,7 +72,7 @@ def find_browser(kind: str = "msedge") -> str | None:
 
 
 PAGE_TIMEOUT = 45_000
-DL_TIMEOUT = 180_000
+DL_TIMEOUT = 180_000  # longer downloads switch to a direct streamed download (see fetch)
 
 
 @dataclass
@@ -395,7 +395,52 @@ class Moodle:
                 return body, r.url, dict(r.headers)
             finally:
                 await r.dispose()
-        return await self._retry(url, go)
+        async def go_or_direct():
+            try:
+                return await go()
+            except LoginExpired:
+                raise
+            except Exception as e:
+                # Big files (e.g. a 440 MB lab pack) stall inside the browser's
+                # network stack, especially behind a local proxy. Retrying the
+                # browser just burns the timeout again, so switch to a plain
+                # streamed download with the same session cookies at once.
+                if not re.search(r"Timeout|ECONNRESET|aborted|string longer than", str(e)):  # Node cannot hold >~400 MB bodies
+                    raise
+                self.log("      (浏览器下载太慢或被中断，改用直接下载……)")
+                return await self._fetch_direct(url)
+        return await self._retry(url, go_or_direct)
+
+    async def _fetch_direct(self, url: str) -> tuple[bytes, str, dict]:
+        import urllib.request
+        host = urlparse(url).hostname or ""
+        jar = [c for c in await self.ctx.cookies() if host.endswith(c["domain"].lstrip("."))]
+        header = "; ".join(f"{c['name']}={c['value']}" for c in jar)
+
+        def run(proxied: bool):
+            handlers = [] if proxied else [urllib.request.ProxyHandler({})]
+            opener = urllib.request.build_opener(*handlers)
+            req = urllib.request.Request(url, headers={"Cookie": header, "User-Agent": "lmcore-sync"})
+            with opener.open(req, timeout=120) as resp:   # timeout per read, not for the whole file
+                chunks = []
+                while True:
+                    block = resp.read(1 << 20)
+                    if not block:
+                        break
+                    chunks.append(block)
+                return b"".join(chunks), resp.geturl(), {k.lower(): v for k, v in resp.headers.items()}
+
+        last = None
+        for proxied in (False, True):     # direct first; then through the system proxy
+            try:
+                body, final, headers = await asyncio.to_thread(run, proxied)
+                self._check_auth(final, body[:4000].decode("utf-8", "replace") if looks_like_html(body) else "")
+                return body, final, headers
+            except LoginExpired:
+                raise
+            except Exception as e:
+                last = e
+        raise RuntimeError(f"直接下载也失败：{last}")
 
 
 def filename_from(url: str, headers: dict, hint: str = "") -> str:

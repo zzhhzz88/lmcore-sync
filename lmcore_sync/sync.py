@@ -20,7 +20,7 @@ from .organize import (AI_DIR, CATEGORIES, MANIFEST, STATE_DIR, ExistingIndex, a
 AI_DIRNAME = AI_DIR
 SKIP_MODS = {"label", "quiz", "lti", "choice", "feedback", "attendance", "zoom", "questionnaire",
              "scheduler", "chat", "glossary", "workshop", "h5pactivity", "subsection", "qbank", "bigbluebuttonbn"}
-MAX_MB = 400
+MAX_MB = 1024  # some lab packs ship whole datasets (ISA305 Week 11: 440 MB)
 
 
 def file_key(url: str) -> str:

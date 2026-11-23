@@ -25,7 +25,7 @@ from .courses import auto_entries, course_code, courses_root, current_real_cours
 from .convert import Converter, CONVERTIBLE
 from .moodle import Moodle, LoginExpired
 from .organize import CATEGORIES, MANIFEST, STATE_DIR
-from .organize import sha256_bytes
+from .organize import sha256_bytes, sha256_file
 from .sync import AI_DIRNAME, CourseSync, norm
 
 HOME = Path(__file__).resolve().parent.parent
@@ -195,6 +195,9 @@ async def cmd_setup(cfg, args):
                                                no_convert=False, non_interactive=False))
 
 
+# small source/text files worth unpacking from lab zips besides convertible documents
+DOC_EXT_SMALL = {".m", ".py", ".txt", ".md", ".csv", ".json", ".r", ".v", ".sv", ".vhd", ".c", ".h", ".cpp"}
+
 # folders inside the course whose files are build artefacts, not course material
 AI_SKIP_DIRS = {"build", "quartus", "rtl", "tb", "db", "incremental_db", "results", "figures", "fig",
                 "runnable", "scripts", ".ipynb_checkpoints", "__pycache__", ".venv", "runtime", "tmp",
@@ -228,10 +231,11 @@ def build_ai_copies(cfg, folder: Path, rows: list[dict] | None, conv: Converter,
         ai_dir = ai_root / src.parent.relative_to(folder)
         if ext in readable:
             add_job(src, ai_dir)
-        elif ext == ".zip" and not src.name.startswith("_") and src.stat().st_size < 300 * 1024 * 1024:
+        elif ext == ".zip" and not src.name.startswith("_"):
             # ("_xxx.zip" = personal process archives, not course material)
-            # unpack lab packs etc. so the manuals inside become readable too
-            xdir = ai_dir / f"{src.stem}_{sha256_bytes(src.read_bytes())[:12]}_解压"
+            # unpack the documents of lab packs so the manuals become readable too;
+            # datasets / binaries inside (often hundreds of MB) are left in the zip
+            xdir = ai_dir / f"{src.stem}_{sha256_file(src)[:12]}_解压"
             if not xdir.exists():
                 try:
                     with zipfile.ZipFile(src) as z:
@@ -240,6 +244,9 @@ def build_ai_copies(cfg, folder: Path, rows: list[dict] | None, conv: Converter,
                             if not target.is_relative_to(xdir.resolve()) or info.is_dir():
                                 continue  # zip-slip guard
                             if "__MACOSX" in info.filename:
+                                continue
+                            if (Path(info.filename).suffix.lower() not in readable | DOC_EXT_SMALL
+                                    or info.file_size > 50 * 1024 * 1024):
                                 continue
                             target.parent.mkdir(parents=True, exist_ok=True)
                             with z.open(info) as fsrc, open(target, "wb") as fdst:
@@ -263,7 +270,7 @@ def build_ai_copies(cfg, folder: Path, rows: list[dict] | None, conv: Converter,
             log(f"      转换失败 {src.name}: {res.get(src)}")
     for src in sources:  # zip packs: point the manifest at the unpacked folder
         if src.suffix.lower() == ".zip":
-            x = ai_root / src.parent.relative_to(folder) / f"{src.stem}_{sha256_bytes(src.read_bytes())[:12]}_解压"
+            x = ai_root / src.parent.relative_to(folder) / f"{src.stem}_{sha256_file(src)[:12]}_解压"
             if x.exists():
                 done[src.relative_to(folder).as_posix()] = x.relative_to(folder).as_posix() + "/"
     return done
