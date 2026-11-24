@@ -4,7 +4,7 @@
 
 **专为西交利物浦大学（XJTLU）学生做的 Learning Mall Core 课件同步助手**
 
-登录一次 → 本学期每门课自动在桌面建好文件夹 → 课件、作业要求、Lab、Handbook、公告全部下载归类 → 截止日期一张表看清
+登录一次 → 本学期每门课自动在桌面建好文件夹 → 课件、作业要求、Lab、Handbook、公告全部下载归类 → **往年试题自动配齐** → 截止日期一张表看清
 
 [![XJTLU only](https://img.shields.io/badge/XJTLU-Learning%20Mall%20Core-6a1b9a)](https://core.xjtlu.edu.cn)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)](#-三步上手)
@@ -25,6 +25,7 @@
 - 每周开 Learning Mall，一门门点进去下 Lecture，下完散落在「下载」文件夹里
 - 老师悄悄更新了 Lecture 5-2 的 PDF，你手里还是旧的
 - 机房上机测试、线下 in-class test 在 Moodle 上**根本没有提交入口**，日历里看不到，差点错过
+- 考前去图书馆试卷库一份份找往年卷，课程还改过代码（ADS305 以前叫 INT303），按新代码根本搜不到
 - 想让 AI 帮你复习，结果它读 PDF 读得一塌糊涂
 
 ## ✨ 它帮你做什么
@@ -32,13 +33,13 @@
 | | 功能 | 说明 |
 |---|---|---|
 | 📁 | **自动在桌面建课程文件夹** | 识别本学期的真实课程（自动跳过 Communication Area、Career Centre 这类非课程），每门课一个 `桌面/<课程代码>/`，下好编号子文件夹。已有同名文件夹就沿用 |
+| 📝 | **往年试题自动配齐** | 第一次给课程建文件夹时，自动去西浦图书馆 [Past Exam Papers](https://etd.xjtlu.edu.cn/index.html#/SearchDetail/EXAMXJTLU) 取最近 5–6 套期末/补考卷，放进 `05_考试复习/往年试题/`。**课程改过代码也能找到**：按代码搜不到，就按 Learning Mall 上的课程名搜出旧代码（ADS305 → INT303、ISA305 → INT301），同名的别校区课程（…TC）自动跳过 |
 | 📥 | **全量下载并分类** | Lecture、Lab、作业题目和附件、Module Handbook、公告、你自己的提交和老师反馈，自动分进「课件 / 实验 / 作业 / 考试复习…」 |
 | 🧹 | **不重复、不覆盖** | 按文件内容（SHA-256）去重：你以前手动下的、改过名、挪过位置的都认得出，不会再下一份；你自己放的文件永远不动 |
 | 🔄 | **老师更新了也知道** | 老师替换了文件，新版放原位，旧版自动收进 `_旧版本/` |
 | ⏰ | **一张表看清所有 DDL** | 桌面生成 `作业DDL.md`：Moodle 作业 + **Module Handbook 考核表** + 没有提交入口的考核提醒，带占比、剩余天数、提交状态，还有最近 7 天新增资料 |
 | 📅 | **导入手机日历** | 同时生成 `作业DDL.ics`，导入 Outlook / 苹果 / 谷歌日历，提前 1 天和 2 小时提醒 |
 | 🤖 | **给 AI 准备好的文字版** | PDF / PPT / Word / Notebook / 网页全部转成 Markdown（实验 zip 先解压），放在 `06_AI可读版/`，目录结构一一对应，还附 AI 阅读目录 |
-| 📝 | **往年试题自动配齐** | 第一次给课程建文件夹时，去西浦图书馆 [Past Exam Papers](https://etd.xjtlu.edu.cn/index.html#/SearchDetail/EXAMXJTLU) 按课程代码搜最近 5–6 套期末/补考卷，放进 `05_考试复习/往年试题/`。**课程改过代码也能找到**：搜不到就按 Learning Mall 上的课程名搜（比如 ADS305 以前叫 INT303、ISA305 以前叫 INT301），同名的别校区课程（…TC）会跳过 |
 | 🕘 | **每天自动同步** | 一键注册 Windows 定时任务；登录过期时会弹出登录窗口，没登录也不会卡住，只在 DDL 顶部提醒你 |
 
 ## 🚀 三步上手
@@ -76,6 +77,8 @@
       + 04_作业/Coursework 2/ADS305 CW2 Data Brief.pdf
       ↻ 02_课件/Lecture5 Data Visualization.pdf（老师更新了文件，旧版在 _旧版本/）
    完成：新下载 103，已有跳过 26，失败 0，AI 可读版 142
+      + 05_考试复习/往年试题/INT303_2025-2026_Final.pdf
+   往年试题（往年代码 INT303）：5/5 份在本地
 
 >> 作业 DDL 已更新：C:\Users\you\Desktop\作业DDL.md
    未交 12-02 23:59  ADS305  Project: Data Analysis and Modeling（占总评 20%）
@@ -97,7 +100,8 @@
     ├── 03_实验/           Lab 材料（老师的文件夹按原名保留）
     ├── 04_作业/
     │   └── Coursework 2/  题目、数据、作业说明_Moodle页面.md、我的提交与反馈/
-    ├── 05_考试复习/       往年试题、模拟题
+    ├── 05_考试复习/
+    │   └── 往年试题/      INT303_2025-2026_Final.pdf … + 往年试题清单.md（每份卷子的网页链接）
     ├── 06_AI可读版/       ↑ 上面所有文档的 Markdown 版，丢给 AI 就行
     └── 07_参考资料/
 ```
