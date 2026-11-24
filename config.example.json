@@ -12,5 +12,8 @@
   "retries": 3,
   "courses": [],
   "extra_deadlines": [],
-  "_说明": "courses 留空即可：同步时会自动发现本学期课程并在桌面建文件夹。想手动指定就加 {\"match\": \"ABC123\", \"folder\": \"D:/学习/abc123\"}"
+  "_说明": "courses 留空即可：同步时会自动发现本学期课程并在桌面建文件夹。想手动指定就加 {\"match\": \"ABC123\", \"folder\": \"D:/学习/abc123\"}",
+  "past_papers": true,
+  "past_paper_codes": {},
+  "_说明_past_paper_codes": "可选：自动识别错了往年代码时手动指定，例如 {\"ADS305\": \"INT303\"}"
 }

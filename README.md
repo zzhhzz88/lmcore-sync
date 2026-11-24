@@ -38,7 +38,8 @@
 | ⏰ | **一张表看清所有 DDL** | 桌面生成 `作业DDL.md`：Moodle 作业 + **Module Handbook 考核表** + 没有提交入口的考核提醒，带占比、剩余天数、提交状态，还有最近 7 天新增资料 |
 | 📅 | **导入手机日历** | 同时生成 `作业DDL.ics`，导入 Outlook / 苹果 / 谷歌日历，提前 1 天和 2 小时提醒 |
 | 🤖 | **给 AI 准备好的文字版** | PDF / PPT / Word / Notebook / 网页全部转成 Markdown（实验 zip 先解压），放在 `06_AI可读版/`，目录结构一一对应，还附 AI 阅读目录 |
-| 🕘 | **每天自动同步** | 一键注册 Windows 定时任务；登录过期时不会卡住，只在 DDL 顶部提醒你重新登录 |
+| 📝 | **往年试题自动配齐** | 第一次给课程建文件夹时，去西浦图书馆 [Past Exam Papers](https://etd.xjtlu.edu.cn/index.html#/SearchDetail/EXAMXJTLU) 按课程代码搜最近 5–6 套期末/补考卷，放进 `05_考试复习/往年试题/`。**课程改过代码也能找到**：搜不到就按 Learning Mall 上的课程名搜（比如 ADS305 以前叫 INT303、ISA305 以前叫 INT301），同名的别校区课程（…TC）会跳过 |
+| 🕘 | **每天自动同步** | 一键注册 Windows 定时任务；登录过期时会弹出登录窗口，没登录也不会卡住，只在 DDL 顶部提醒你 |
 
 ## 🚀 三步上手
 
@@ -125,6 +126,17 @@
 ## 🤔 常见问题
 
 <details>
+<summary><b>往年试题是怎么来的？会不会把我账号弄出问题？</b></summary>
+
+来源是西浦图书馆的 Past Exam Papers（`etd.xjtlu.edu.cn`）。工具在你已经登录的浏览器里打开它，用网站自己的「View Online」流程拿 PDF，和你手动点开是一样的，不绕过任何权限。
+
+- **只在第一次建课程文件夹时查一次**，之后的每日同步不会再去碰试卷库；缺的卷子最多每天补一次。
+- 每门课只取最近 5–6 套；**两份之间至少隔 25 秒，一次最多 12 份**。图书馆会把短时间内连续下载判定为“批量下载”，把账号锁 60 分钟。一旦遇到这种锁，工具立刻停手，**2 小时内不再访问**，之后的同步自动补齐。
+- 学校没给下载权限、或者要求先在网页上解锁时，工具不会硬来：它在 `往年试题/往年试题清单.md` 里列出每份卷子和「打开」链接，你在浏览器里看就行。
+- 试卷版权归学校，**只供本人复习**，不要上传、转发（`往年试题/` 默认不会被 git 提交）。
+</details>
+
+<details>
 <summary><b>为什么不直接用 Moodle-DL？</b></summary>
 
 [Moodle-DL](https://github.com/C0D3D3V/Moodle-DL) 很好用，但它依赖 Moodle 的手机端 Web Service。西浦的 Learning Mall Core 关闭了这个接口（`enablemobilewebservice = 0`），还走统一身份认证，所以连不上。本工具改用**真实浏览器（Edge）由你本人登录**，再用这个会话下载。
@@ -191,6 +203,7 @@
 | `python -m lmcore_sync sync --only EEE339 COS301` | 只同步某几门 |
 | `python -m lmcore_sync sync --refresh` | 不看记录，全部重新核对 |
 | `python -m lmcore_sync ddl` | 只刷新 `作业DDL.md` / `.ics` |
+| `python -m lmcore_sync past-papers` | 重新查往年试题（平时只在第一次建文件夹时自动查一次） |
 | `python -m lmcore_sync convert` | 只重新生成 AI 可读版 |
 | `python -m lmcore_sync login` | 登录过期时重新登录 |
 | `python -m lmcore_sync doctor` | 检查环境 |

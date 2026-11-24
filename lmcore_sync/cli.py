@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import deadlines
+from . import deadlines, past_papers
 from .calendar_ics import build_ics
 from .courses import auto_entries, course_code, courses_root, current_real_courses, resolve_layout, scaffold
 from .convert import Converter, CONVERTIBLE
@@ -360,6 +360,8 @@ async def cmd_sync(cfg, args):
                                                        "all_forums": args.all_forums,
                                                        "layout": layout}, log=log)
             await cs.run()
+            if not getattr(args, "no_past_papers", False) and cfg.get("past_papers", True):
+                await past_papers.fetch_for_course(m, c, folder, layout["exam"], cfg, log=log)
             ai = {} if args.no_convert else build_ai_copies(cfg, folder, cs.rows, conv, layout["ai"])
             if not args.no_convert:
                 write_ai_index(folder, layout["ai"])
@@ -394,6 +396,31 @@ async def write_ddl(cfg, m, courses):
     for r in rows:
         if r["due"] and r["due"] >= datetime.now() and not deadlines.is_done(r["status"]):
             log(f"   未交 {r['due']:%m-%d %H:%M}  {r['course'].split('-')[0]}  {r['name']}")
+
+
+async def cmd_past_papers(cfg, args):
+    """Look past exam papers up again (normally done once, when a course folder is set up)."""
+    await ensure_login(cfg)
+    only = {norm(x) for x in (args.only or [])}
+    async with moodle(cfg) as m:
+        await m.is_logged_in()
+        courses = await m.courses()
+        client = past_papers.EtdClient(m, log)
+        if not await client.open():
+            raise SystemExit("图书馆试卷库没有登录成功，请稍后再试。")
+        try:
+            for entry in cfg["courses"]:
+                if only and not any(o in norm(entry["match"]) for o in only):
+                    continue
+                c = match_course(courses, entry["match"])
+                if not c:
+                    continue
+                layout = resolve_layout(entry, cfg)
+                log(f"\n======== {c['shortname']}")
+                await past_papers.fetch_for_course(m, c, Path(entry["folder"]).expanduser(), layout["exam"], cfg,
+                                                   log=log, force=True, client=client)
+        finally:
+            await client.close()
 
 
 async def cmd_ddl(cfg, args):
@@ -442,6 +469,10 @@ def main(argv=None):
     s.add_argument("--non-interactive", action="store_true", help="登录失效时退出并保留上次结果，不弹登录窗口")
     s.add_argument("--login-popup", action="store_true",
                    help="配合 --non-interactive（定时任务）：登录失效时仍弹出登录窗口等你 15 分钟")
+    s.add_argument("--no-past-papers", action="store_true", help="不查往年试题")
+    pp = sub.add_parser("past-papers", help="重新查找并下载往年试题（平时只在第一次建文件夹时查一次）")
+    pp.add_argument("--only", nargs="*", help="只查这些课程代码")
+    pp.add_argument("--force", action="store_true", help="（默认就是重新查，保留此参数方便记忆）")
     sub.add_parser("doctor", help="检查本地运行环境")
     sch = sub.add_parser("schedule", help="Windows 每日定时同步")
     sch.add_argument("action", choices=["install", "remove", "status"])
@@ -453,7 +484,7 @@ def main(argv=None):
         if args.cmd == "doctor":
             raise SystemExit(maintenance.doctor(cfg, HOME, PROFILE))
         raise SystemExit(maintenance.schedule(args.action, HOME, args.time))
-    fn = {"setup": cmd_setup, "login": cmd_login, "courses": cmd_courses, "sync": cmd_sync, "convert": cmd_convert, "ddl": cmd_ddl}[args.cmd]
+    fn = {"setup": cmd_setup, "login": cmd_login, "courses": cmd_courses, "sync": cmd_sync, "convert": cmd_convert, "ddl": cmd_ddl, "past-papers": cmd_past_papers}[args.cmd]
     def run():
         try:
             asyncio.run(fn(cfg, args))
